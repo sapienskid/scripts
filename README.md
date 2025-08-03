@@ -2,121 +2,76 @@
 
 A collection of useful scripts for system administration, productivity, and automation.
 
-## Scripts Available
+## Available Scripts
 
-### 🔒 WeBlock - Website Blocker
+### 🔒 `weblock` - Website Blocker
+System-wide website blocking with timer functionality and permanent blocklists.
 
-A powerful, easy-to-use command-line tool for blocking distracting websites system-wide. Perfect for improving focus and productivity by eliminating digital distractions.
+**Quick usage:** `weblock lock facebook.com`, `weblock timer 2h`, `weblock list`
 
-#### Features
-- ✅ **System-wide blocking** - Works across all browsers and applications
-- 🕐 **Timer functionality** - Block sites for a specific duration
-- 📝 **Flexible blocklists** - Temporary and permanent blocking lists
-- 🎯 **Individual site control** - Block/unblock specific websites instantly
-- 🎨 **Colorful CLI interface** - Easy-to-read colored output
-- 📊 **Activity logging** - Track your blocking activity
-- 🔧 **Easy configuration** - Simple text-based configuration files
-- 📦 **Single file** - Everything contained in one script
+| Command | Description |
+|---------|-------------|
+| `weblock init` | Initialize configuration |
+| `weblock lock <site> [--permanent]` | Block website immediately |
+| `weblock lock-all` | Block all sites in blocklist |
+| `weblock unlock [site]` | Unblock website or all sites |
+| `weblock timer <duration> [site]` | Block for specified time (30s, 15m, 2h, 1d) |
+| `weblock list` | Show blocklists and status |
+| `weblock status` | Check timer status |
+| `weblock remove <site> [--permanent]` | Remove from blocklist |
 
-#### Quick Start
+**Requires:** sudo for blocking operations | **Config:** `~/.config/weblock/`
 
-```bash
-# Install WeBlock
-sudo cp weblock /usr/local/bin/
-sudo chmod +x /usr/local/bin/weblock
+### 📊 `sysmon` - System Monitor  
+Real-time system monitoring with CPU, memory, disk, temperature, battery, and network stats.
 
-# Initialize configuration
-weblock init
+**Quick usage:** `sysmon`, `sysmon watch`, `sysmon processes 10`
 
-# Lock a website immediately
-sudo weblock lock facebook.com
+| Command | Description |
+|---------|-------------|
+| `sysmon` | System overview with all stats |
+| `sysmon watch [interval]` | Continuous monitoring (default: 2s) |
+| `sysmon processes [count]` | Top CPU/memory processes (default: 10) |
+| `sysmon disk` | Disk usage for all filesystems |
+| `sysmon network` | Network interfaces and connections |
+| `sysmon logs [lines]` | Recent system logs (default: 20) |
+| `sysmon alerts` | Configure alert thresholds |
 
-# Start a 2-hour focus session with all websites in blocklist
-sudo weblock timer 2h
-
-# Check status
-weblock list
-```
-
-#### Installation
-```bash
-sudo cp weblock /usr/local/bin/
-sudo chmod +x /usr/local/bin/weblock
-```
-
-#### Basic Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `weblock init` | Initialize WeBlock configuration | `weblock init` |
-| `weblock lock <site>` | Lock (block) specific website | `weblock lock facebook.com` |
-| `weblock lock-all` | Lock all websites from blocklist | `sudo weblock lock-all` |
-| `weblock unlock [site]` | Unlock specific website or all | `sudo weblock unlock facebook.com` |
-| `weblock remove <site>` | Remove site from blocklist | `weblock remove facebook.com` |
-| `weblock list` | Show all blocklists and status | `weblock list` |
-
-#### Timer Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `weblock timer <duration> [site]` | Lock websites for specified time | `sudo weblock timer 30m` |
-| `weblock status` | Check timer status | `weblock status` |
-| `weblock stop [site]` | Stop active timers | `sudo weblock stop` |
-
-**Duration formats:** `30s`, `15m`, `2h`, `1d`
-
-#### Example Usage
-```bash
-# Focus session workflow
-weblock lock facebook.com
-weblock lock twitter.com
-sudo weblock timer 2h                    # Block for 2 hours
-
-# Quick lock/unlock
-sudo weblock lock facebook.com           # Lock immediately
-sudo weblock unlock facebook.com         # Unlock later
-
-# Permanent security blocks
-weblock lock malware-site.com --permanent
-```
-
-#### Configuration
-WeBlock stores configuration in `~/.config/weblock/`:
-- `blocklist.txt` - Temporary websites to block
-- `permanent_blocklist.txt` - Permanently blocked websites
-- `weblock.log` - Activity log
-
-#### Requirements
-- **Linux** (systemd-based distributions)
-- **Root access** (sudo) for blocking/unblocking operations
+**Optional:** bc package for advanced calculations | **Config:** `~/.config/sysmon/`
 
 ---
 
 ## Installation
 
-### Individual Scripts
+**Individual script:**
 ```bash
 sudo cp <script-name> /usr/local/bin/
 sudo chmod +x /usr/local/bin/<script-name>
 ```
 
-### All Scripts
+**All scripts:**
 ```bash
-# Copy all scripts to system PATH
-for script in *; do
-    if [[ -f "$script" && -x "$script" ]]; then
-        sudo cp "$script" /usr/local/bin/
-    fi
+for script in weblock sysmon; do
+    sudo cp "$script" /usr/local/bin/
+    sudo chmod +x "/usr/local/bin/$script"
 done
 ```
+
+## Quick Reference
+
+| Script | Purpose | Key Commands |
+|--------|---------|--------------|
+| `weblock` | Website blocking | `lock`, `timer`, `list`, `unlock` |
+| `sysmon` | System monitoring | `watch`, `processes`, `disk`, `network` |
+
+**Get help:** All scripts support `--help` or `help` command
 
 ## Contributing
 
 Feel free to submit issues, feature requests, or pull requests! When adding new scripts:
-
-1. Include proper documentation and help text
-2. Follow similar coding standards as existing scripts
-3. Test thoroughly before submitting
+- Include proper documentation and help text
+- Follow similar coding standards as existing scripts  
+- Test thoroughly before submitting
 
 ## License
 
