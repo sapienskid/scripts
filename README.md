@@ -18,7 +18,7 @@ System-wide website blocking for Arch Linux.
 | `weblock unlock [site]` | Unblock website or all sites |
 | `weblock list` | Show blocklist and currently blocked sites |
 | `weblock remove <site> [-u]` | Remove from blocklist (use -u to also unblock) |
-| `weblock reset [-f]` | Reset all configuration |
+| `weblock reset [-f]` | Reset all configuration and unblock ALL websites |
 
 **Requires:** sudo for blocking operations | **Config:** `~/.config/weblock/`
 

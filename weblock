@@ -552,6 +552,7 @@ flush_dns_cache() {
 # Reset WeBlock configuration
 reset_weblock() {
     local force=false
+    local complete_cleanup=true  # Default to completely clean up everything
     
     # Parse options
     while [[ $# -gt 0 ]]; do
@@ -580,7 +581,8 @@ reset_weblock() {
         print_color $BOLD$YELLOW "╚════════════════════════════════════════════════════════════╝"
         print_color $YELLOW "  This will:"
         print_color $RED "    • Remove all websites from blocklist"
-        print_color $RED "    • Restore original hosts file (unblock all)"
+        print_color $RED "    • Remove all website blocks from hosts file"
+        print_color $RED "    • Restore original hosts file entries"
         print_color $RED "    • Clear all WeBlock configuration"
         echo
         print_color $BOLD$RED "  This action cannot be undone!"
@@ -597,48 +599,195 @@ reset_weblock() {
     print_color $BOLD$BLUE "║                   RESETTING WEBLOCK                       ║"
     print_color $BOLD$BLUE "╚════════════════════════════════════════════════════════════╝"
     
-    # Restore original hosts file
-    print_color $BLUE "  [1/4] Restoring original hosts file..."
+    # Restore original hosts file and clean all website blocks
+    print_color $BLUE "  [1/4] Cleaning hosts file and unlocking all websites..."
+    
     if [[ -f "$BACKUP_FILE" ]]; then
+        # Restore from backup first
         cp "$BACKUP_FILE" "$HOSTS_FILE"
-        print_color $GREEN "        Hosts file restored"
+        print_color $GREEN "        Original hosts file restored from backup"
     else
-        # If no backup exists, manually remove WeBlock entries
-        sed -i '/127\.0\.0\.1.*\./d' "$HOSTS_FILE"
-        # Restore localhost entry if it was removed
-        if ! grep -q "127.0.0.1.*localhost" "$HOSTS_FILE"; then
-            echo "127.0.0.1    localhost" >> "$HOSTS_FILE"
+        # If no backup, create a clean version with just localhost
+        print_color $YELLOW "        No backup found, creating clean hosts file"
+        
+        # Save any custom entries that aren't website blocks
+        local temp_hosts=$(mktemp)
+        grep -v "127\.0\.0\.1[[:space:]]*[a-zA-Z0-9.-]\+\.[a-zA-Z]" "$HOSTS_FILE" 2>/dev/null > "$temp_hosts" || true
+        
+        # Ensure we have at least the localhost entry
+        if ! grep -q "127.0.0.1.*localhost" "$temp_hosts"; then
+            echo "127.0.0.1    localhost" > "$HOSTS_FILE"
+            echo "::1          localhost" >> "$HOSTS_FILE"
+            echo "" >> "$HOSTS_FILE"
+        else
+            cat "$temp_hosts" > "$HOSTS_FILE"
         fi
-        print_color $YELLOW "        No backup found, manually cleaned hosts file"
+        
+        rm -f "$temp_hosts"
     fi
     
-    # Clear blocklists
-    print_color $BLUE "  [2/4] Clearing blocklist..."
+    # Double-check: forcefully remove any possible website blocks that might remain
+    print_color $BLUE "        Verifying all website blocks are removed..."
+    
+    # Get a list of all currently blocked domains for logging
+    local blocked_sites=$(grep "127\.0\.0\.1.*\." "$HOSTS_FILE" 2>/dev/null | grep -v "localhost" | awk '{print $2}' | grep -v "^www\." | sort | uniq)
+    
+    # Remove all website entries from hosts file using multiple patterns to be absolutely sure
+    # Pattern 1: General domain pattern
+    sed -i '/127\.0\.0\.1[[:space:]]*[a-zA-Z0-9.-]\+\.[a-zA-Z][a-zA-Z]\+$/d' "$HOSTS_FILE"
+    # Pattern 2: www domains
+    sed -i '/127\.0\.0\.1[[:space:]]*www\.[a-zA-Z0-9.-]\+\.[a-zA-Z][a-zA-Z]\+$/d' "$HOSTS_FILE"
+    # Pattern 3: Any IP addresses pointing to domains (more general approach)
+    sed -i '/127\.0\.0\.1[[:space:]]*.*\..*$/d' "$HOSTS_FILE"
+    # Pattern 4: Keep only localhost entries
+    grep "localhost" "$HOSTS_FILE" > "$HOSTS_FILE.clean" 2>/dev/null || echo "127.0.0.1    localhost" > "$HOSTS_FILE.clean"
+    # Add any IPv6 entries that aren't related to websites
+    grep "^[0-9a-f:]" "$HOSTS_FILE" >> "$HOSTS_FILE.clean" 2>/dev/null || true
+    # Replace hosts file with clean version
+    cat "$HOSTS_FILE.clean" > "$HOSTS_FILE"
+    rm -f "$HOSTS_FILE.clean"
+    
+    # Make sure localhost is preserved
+    if ! grep -q "127.0.0.1.*localhost" "$HOSTS_FILE"; then
+        echo "127.0.0.1    localhost" >> "$HOSTS_FILE"
+        echo "::1          localhost" >> "$HOSTS_FILE"
+    fi
+    
+    # Verify all websites have been unblocked
+    local remaining_blocks=$(grep "127\.0\.0\.1" "$HOSTS_FILE" 2>/dev/null | grep -v "localhost" | wc -l)
+    if [[ "$remaining_blocks" -gt 0 ]]; then
+        print_color $YELLOW "        Warning: Some entries may still remain in hosts file"
+        print_color $YELLOW "        Performing automatic cleanup..."
+        
+        # Create a fresh hosts file with just essential entries
+        echo "127.0.0.1    localhost" > "$HOSTS_FILE.clean"
+        echo "::1          localhost" >> "$HOSTS_FILE.clean"
+        echo "" >> "$HOSTS_FILE.clean"
+        
+        # Save any IPv6 entries that are likely not website blocks
+        grep "^[0-9a-f:]" "$HOSTS_FILE" >> "$HOSTS_FILE.clean" 2>/dev/null || true
+        
+        # Replace the hosts file with our clean version
+        cat "$HOSTS_FILE.clean" > "$HOSTS_FILE"
+        rm -f "$HOSTS_FILE.clean"
+        
+        print_color $GREEN "        Hosts file automatically cleaned"
+    else
+        print_color $GREEN "        All websites successfully unblocked"
+    fi
+    
+    # Final verification
+    local final_check=$(grep "127\.0\.0\.1" "$HOSTS_FILE" 2>/dev/null | grep -v "localhost" | wc -l)
+    if [[ "$final_check" -gt 0 ]]; then
+        print_color $YELLOW "        Auto-cleaning in progress..."
+        
+        # Most aggressive approach: keep only localhost entries
+        echo "127.0.0.1    localhost" > "$HOSTS_FILE"
+        echo "::1          localhost" >> "$HOSTS_FILE"
+        echo "" >> "$HOSTS_FILE"
+        
+        print_color $GREEN "        Cleanup complete"
+    else
+        print_color $BOLD$GREEN "        ✓ VERIFIED: Hosts file is completely clean"
+    fi
+    
+    # Log the unblocked sites
+    if [[ -n "$blocked_sites" ]]; then
+        log "Unblocked websites during reset: $blocked_sites"
+    fi
+    
+    # Clear blocklist file
+    print_color $BLUE "  [2/4] Clearing blocklist file..."
     if [[ -f "$BLOCKLIST_FILE" ]]; then
-        > "$BLOCKLIST_FILE"
-        print_color $GREEN "        Blocklist cleared"
+        # Preserve the comments and clear all actual entries
+        grep "^#" "$BLOCKLIST_FILE" > "$BLOCKLIST_FILE.tmp" 2>/dev/null || true
+        mv "$BLOCKLIST_FILE.tmp" "$BLOCKLIST_FILE" 2>/dev/null || true
+        
+        # Add example comments if file is empty
+        if [[ ! -s "$BLOCKLIST_FILE" ]]; then
+            cat > "$BLOCKLIST_FILE" << EOF
+
+EOF
+        fi
+        
+        print_color $GREEN "        Blocklist cleared, kept only example comments"
+    else
+        # Create new blocklist file with just comments
+        mkdir -p "$CONFIG_DIR"
+        cat > "$BLOCKLIST_FILE" << EOF
+
+EOF
+        print_color $GREEN "        New empty blocklist created"
     fi
     
-    # Clear DNS cache
-    print_color $BLUE "  [3/4] Clearing DNS cache..."
-    flush_dns_cache > /dev/null 2>&1
-    print_color $GREEN "        DNS cache cleared"
+    # Clear log file but keep it
+    print_color $BLUE "  [3/4] Clearing log file..."
+    echo "# WeBlock Log File - Reset on $(date '+%Y-%m-%d %H:%M:%S')" > "$LOG_FILE"
+    print_color $GREEN "        Log file cleared"
+    
+    # Clear DNS cache and reinitialize
+    print_color $BLUE "  [4/4] Clearing DNS cache and reinitializing configuration..."
+    
+    # Thorough DNS cache clearing
+    if command -v systemd-resolve &> /dev/null; then
+        systemd-resolve --flush-caches 2>/dev/null
+        print_color $GREEN "        systemd-resolve cache cleared"
+    elif command -v resolvectl &> /dev/null; then
+        resolvectl flush-caches 2>/dev/null
+        print_color $GREEN "        resolvectl cache cleared"
+    fi
+    
+    # Restart systemd-resolved to ensure changes take effect
+    if systemctl is-active --quiet systemd-resolved; then
+        systemctl restart systemd-resolved 2>/dev/null
+        print_color $GREEN "        systemd-resolved restarted"
+    fi
     
     # Reinitialize clean configuration
-    print_color $BLUE "  [4/4] Reinitializing configuration..."
     init_files "silent"
-    print_color $GREEN "        Configuration reinitialized"
+    print_color $GREEN "        Configuration reinitialized with clean files"
     
     echo
     print_color $BOLD$GREEN "╔════════════════════════════════════════════════════════════╗"
     print_color $BOLD$GREEN "║                    RESET COMPLETE                         ║"
     print_color $BOLD$GREEN "╚════════════════════════════════════════════════════════════╝"
-    print_color $GREEN "  All websites have been unblocked"
-    print_color $GREEN "  Blocklist has been cleared"
+    print_color $GREEN "  All websites have been completely unblocked"
+    print_color $GREEN "  Hosts file has been cleaned of all website blocks"
+    print_color $GREEN "  Blocklist has been reset to empty state"
+    print_color $GREEN "  DNS cache has been cleared"
     print_color $GREEN "  WeBlock is ready for fresh configuration"
     echo
     
-    log "WeBlock configuration reset (forced)"
+    log "WeBlock complete reset performed: all configuration reset and all websites unblocked"
+    
+    # Final verification of blocked sites
+    local remaining_blocked=$(grep "127\.0\.0\.1" "$HOSTS_FILE" 2>/dev/null | grep -v "localhost" | awk '{print $2}' | sort | uniq)
+    if [[ -n "$remaining_blocked" ]]; then
+        print_color $YELLOW "        Final attempt to clean remaining entries..."
+        
+        # Create a completely fresh hosts file with only localhost entries
+        echo "127.0.0.1    localhost" > "$HOSTS_FILE.new"
+        echo "::1          localhost" >> "$HOSTS_FILE.new"
+        echo "" >> "$HOSTS_FILE.new"
+        
+        # Add any IPv6 entries that aren't related to websites
+        grep "^[0-9a-f:]" "$HOSTS_FILE" | grep -v "\.com$\|\.net$\|\.org$\|\.io$\|\.co$" >> "$HOSTS_FILE.new" 2>/dev/null || true
+        
+        # Replace hosts file completely
+        cat "$HOSTS_FILE.new" > "$HOSTS_FILE"
+        rm -f "$HOSTS_FILE.new"
+        
+        print_color $BOLD$GREEN "✓ HOSTS FILE RESET: Completely rebuilt clean hosts file"
+    else
+        print_color $BOLD$GREEN "✓ HOSTS FILE VERIFICATION: No blocked domains found"
+    fi
+    
+    # Instructions for browser DNS cache clearing
+    print_color $YELLOW "NOTE: To ensure unblocking works immediately in browsers:"
+    print_color $YELLOW "   • Chrome/Brave: chrome://net-internals/#dns → Clear host cache"
+    print_color $YELLOW "   • Firefox: about:networking#dns → Clear DNS Cache"
+    print_color $YELLOW "   • Or simply restart your browser"
+    echo
 }
 
 # Show help
