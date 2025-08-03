@@ -5,39 +5,29 @@ A collection of useful scripts for system administration, productivity, and auto
 ## Available Scripts
 
 ### 🔒 `weblock` - Website Blocker
-System-wide website blocking with timer functionality and permanent blocklists.
+System-wide website blocking for Arch Linux.
 
-**Quick usage:** `weblock lock facebook.com`, `weblock timer 2h`, `weblock list`
+**Quick usage:** `weblock lock facebook.com`, `weblock list`, `weblock unlock facebook.com`
 
 | Command | Description |
 |---------|-------------|
 | `weblock init` | Initialize configuration |
-| `weblock lock <site> [--permanent]` | Block website immediately |
+| `weblock lock <site> [-n]` | Block website immediately (use -n to skip adding to list) |
+| `weblock block <site>` | Block website without adding to list |
 | `weblock lock-all` | Block all sites in blocklist |
 | `weblock unlock [site]` | Unblock website or all sites |
-| `weblock timer <duration> [site]` | Block for specified time (30s, 15m, 2h, 1d) |
-| `weblock list` | Show blocklists and status |
-| `weblock status` | Check timer status |
-| `weblock remove <site> [--permanent]` | Remove from blocklist |
+| `weblock list` | Show blocklist and currently blocked sites |
+| `weblock remove <site> [-u]` | Remove from blocklist (use -u to also unblock) |
+| `weblock reset [-f]` | Reset all configuration |
 
 **Requires:** sudo for blocking operations | **Config:** `~/.config/weblock/`
 
-### 📊 `sysmon` - System Monitor  
-Real-time system monitoring with CPU, memory, disk, temperature, battery, and network stats.
-
-**Quick usage:** `sysmon`, `sysmon watch`, `sysmon processes 10`
-
-| Command | Description |
-|---------|-------------|
-| `sysmon` | System overview with all stats |
-| `sysmon watch [interval]` | Continuous monitoring (default: 2s) |
-| `sysmon processes [count]` | Top CPU/memory processes (default: 10) |
-| `sysmon disk` | Disk usage for all filesystems |
-| `sysmon network` | Network interfaces and connections |
-| `sysmon logs [lines]` | Recent system logs (default: 20) |
-| `sysmon alerts` | Configure alert thresholds |
-
-**Optional:** bc package for advanced calculations | **Config:** `~/.config/sysmon/`
+#### Features
+- Block websites system-wide using /etc/hosts file
+- Maintains a persistent blocklist
+- Beautiful color-coded terminal output
+- DNS cache flushing for immediate effect
+- Both www and non-www versions of domains are blocked
 
 ---
 
@@ -49,20 +39,25 @@ sudo cp <script-name> /usr/local/bin/
 sudo chmod +x /usr/local/bin/<script-name>
 ```
 
-**All scripts:**
+**For weblock:**
 ```bash
-for script in weblock sysmon; do
-    sudo cp "$script" /usr/local/bin/
-    sudo chmod +x "/usr/local/bin/$script"
-done
+sudo cp weblock /usr/local/bin/
+sudo chmod +x /usr/local/bin/weblock
+```
+
+## Uninstallation
+
+**For weblock:**
+```bash
+sudo rm /usr/local/bin/weblock
+rm -rf ~/.config/weblock  # (optional, removes your configuration)
 ```
 
 ## Quick Reference
 
 | Script | Purpose | Key Commands |
 |--------|---------|--------------|
-| `weblock` | Website blocking | `lock`, `timer`, `list`, `unlock` |
-| `sysmon` | System monitoring | `watch`, `processes`, `disk`, `network` |
+| `weblock` | Website blocking | `lock`, `list`, `unlock`, `remove`, `reset` |
 
 **Get help:** All scripts support `--help` or `help` command
 
@@ -76,3 +71,7 @@ Feel free to submit issues, feature requests, or pull requests! When adding new 
 ## License
 
 This project is open source. Feel free to modify and distribute.
+
+## Last Updated
+
+August 3, 2025

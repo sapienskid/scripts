@@ -2,8 +2,8 @@
 
 # WeBlock - System-wide Website Blocker for Arch Linux
 # Author: sapienskid
-# Description: Block/unblock websites with optional timer functionality
-# Usage: weblock <command> [website] [options]
+# Description: Block/unblock websites
+# Usage: weblock <command> [options] [website]
 #
 # Installation: 
 #   sudo cp weblock /usr/local/bin/ && sudo chmod +x /usr/local/bin/weblock
@@ -24,10 +24,8 @@ else
 fi
 
 BLOCKLIST_FILE="$CONFIG_DIR/blocklist.txt"
-PERMANENT_BLOCKLIST_FILE="$CONFIG_DIR/permanent_blocklist.txt"
 HOSTS_FILE="/etc/hosts"
 BACKUP_FILE="$CONFIG_DIR/hosts_backup.txt"
-TIMER_FILE="$CONFIG_DIR/timer_status.txt"
 LOG_FILE="$CONFIG_DIR/weblock.log"
 
 # Colors for output
@@ -77,7 +75,7 @@ init_files() {
     # Create blocklist file if it doesn't exist
     if [[ ! -f "$BLOCKLIST_FILE" ]]; then
         cat > "$BLOCKLIST_FILE" << EOF
-# WeBlock Temporary Blocklist
+# WeBlock Blocklist
 # Add one website per line (without http:// or https://)
 # Examples:
 # facebook.com
@@ -89,22 +87,6 @@ init_files() {
 EOF
         if [[ "$show_banner" == "show_banner" ]]; then
             print_color $GREEN "  [✓] Created blocklist file"
-        fi
-        files_created=true
-    fi
-    
-    # Create permanent blocklist file if it doesn't exist
-    if [[ ! -f "$PERMANENT_BLOCKLIST_FILE" ]]; then
-        cat > "$PERMANENT_BLOCKLIST_FILE" << EOF
-# WeBlock Permanent Blocklist
-# Add one website per line (without http:// or https://)
-# These websites will always be blocked
-# Examples:
-# malware-site.com
-# phishing-site.com
-EOF
-        if [[ "$show_banner" == "show_banner" ]]; then
-            print_color $GREEN "  [✓] Created permanent blocklist file"
         fi
         files_created=true
     fi
@@ -157,6 +139,46 @@ validate_website() {
 }
 
 # Block a single website
+block_single_website() {
+    local website="$1"
+    
+    if [[ -z "$website" ]]; then
+        print_color $RED "ERROR: Please provide a website to block"
+        print_color $BLUE "Usage: weblock block facebook.com"
+        return 1
+    fi
+    
+    check_root
+    website=$(clean_website "$website")
+    
+    if ! validate_website "$website"; then
+        return 1
+    fi
+    
+    # Check if already blocked
+    if grep -q "127\.0\.0\.1[[:space:]]*$website" "$HOSTS_FILE" 2>/dev/null; then
+        print_color $YELLOW "WARNING: $website is already blocked"
+        return 0
+    fi
+    
+    # Add to hosts file
+    echo "127.0.0.1    $website" >> "$HOSTS_FILE"
+    echo "127.0.0.1    www.$website" >> "$HOSTS_FILE"
+    
+    echo
+    print_color $BOLD$RED "╔════════════════════════════════════════════════════════════╗"
+    print_color $BOLD$RED "║                     WEBSITE BLOCKED                       ║"
+    print_color $BOLD$RED "╚════════════════════════════════════════════════════════════╝"
+    print_color $RED "  Target: $website"
+    print_color $RED "  Status: Successfully blocked"
+    echo
+    
+    log "Blocked single website: $website"
+    
+    # Flush DNS cache
+    flush_dns_cache
+}
+
 # Unblock a single website
 unblock_single_website() {
     local website="$1"
@@ -194,39 +216,48 @@ unblock_single_website() {
 
 # Lock a website (add to list and immediately block)
 lock_website() {
-    local website="$1"
-    local permanent="$2"
-    local skip_root_check="$3"
+    local website=""
+    local add_to_list=true
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -n|--no-list)
+                add_to_list=false
+                shift
+                ;;
+            -*)
+                print_color $RED "ERROR: Unknown option: $1"
+                print_color $BLUE "Usage: weblock lock [-n|--no-list] website"
+                return 1
+                ;;
+            *)
+                website="$1"
+                shift
+                ;;
+        esac
+    done
     
     if [[ -z "$website" ]]; then
         print_color $RED "ERROR: Please provide a website to lock"
-        print_color $BLUE "Usage: weblock lock facebook.com [--permanent]"
+        print_color $BLUE "Usage: weblock lock [-n|--no-list] facebook.com"
         return 1
     fi
     
-    if [[ "$skip_root_check" != "skip_root" ]]; then
-        check_root
-    fi
-    
+    check_root
     website=$(clean_website "$website")
     
     if ! validate_website "$website"; then
         return 1
     fi
     
-    local target_file="$BLOCKLIST_FILE"
-    local list_type="temporary"
-    
-    if [[ "$permanent" == "--permanent" ]]; then
-        target_file="$PERMANENT_BLOCKLIST_FILE"
-        list_type="permanent"
-    fi
-    
-    # Add to blocklist if not already there
-    if ! grep -q "^$website$" "$target_file" 2>/dev/null; then
-        echo "$website" >> "$target_file"
-        print_color $GREEN "ADDED: $website to $list_type blocklist"
-        log "Added $website to $list_type blocklist"
+    # Add to blocklist if requested
+    if [[ "$add_to_list" == "true" ]]; then
+        if ! grep -q "^$website$" "$BLOCKLIST_FILE" 2>/dev/null; then
+            echo "$website" >> "$BLOCKLIST_FILE"
+            print_color $GREEN "ADDED: $website to blocklist"
+            log "Added $website to blocklist"
+        fi
     fi
     
     # Immediately block the website
@@ -240,7 +271,9 @@ lock_website() {
         print_color $BOLD$RED "╚════════════════════════════════════════════════════════════╝"
         print_color $RED "  Target: $website"
         print_color $RED "  Status: Successfully blocked"
-        print_color $GREEN "  List: Added to $list_type blocklist"
+        if [[ "$add_to_list" == "true" ]]; then
+            print_color $GREEN "  List: Added to blocklist"
+        fi
         echo
         
         log "Locked website: $website"
@@ -256,8 +289,27 @@ lock_website() {
 
 # Remove website from blocklist
 remove_from_blocklist() {
-    local website="$1"
-    local permanent="$2"
+    local website=""
+    local force_unblock=false
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -u|--unblock)
+                force_unblock=true
+                shift
+                ;;
+            -*)
+                print_color $RED "ERROR: Unknown option: $1"
+                print_color $BLUE "Usage: weblock remove [-u|--unblock] website"
+                return 1
+                ;;
+            *)
+                website="$1"
+                shift
+                ;;
+        esac
+    done
     
     if [[ -z "$website" ]]; then
         echo
@@ -265,7 +317,7 @@ remove_from_blocklist() {
         print_color $BOLD$RED "║                      INVALID INPUT                        ║"
         print_color $BOLD$RED "╚════════════════════════════════════════════════════════════╝"
         print_color $RED "  Error: Please provide a website to remove"
-        print_color $BLUE "  Usage: weblock remove facebook.com [--permanent]"
+        print_color $BLUE "  Usage: weblock remove [-u|--unblock] facebook.com"
         echo
         return 1
     fi
@@ -276,49 +328,29 @@ remove_from_blocklist() {
     fi
     
     website=$(clean_website "$website")
-    
-    local target_file="$BLOCKLIST_FILE"
-    local list_type="temporary"
     local found_in_list=false
     local was_blocked=false
     
-    if [[ "$permanent" == "--permanent" ]]; then
-        target_file="$PERMANENT_BLOCKLIST_FILE"
-        list_type="permanent"
-    fi
-    
     # Create the file if it doesn't exist
-    if [[ ! -f "$target_file" ]]; then
-        touch "$target_file"
+    if [[ ! -f "$BLOCKLIST_FILE" ]]; then
+        touch "$BLOCKLIST_FILE"
     fi
     
     # Check if website exists in the blocklist
-    if grep -q "^$website$" "$target_file" 2>/dev/null; then
-        sed -i "/^$website$/d" "$target_file"
+    if grep -q "^$website$" "$BLOCKLIST_FILE" 2>/dev/null; then
+        sed -i "/^$website$/d" "$BLOCKLIST_FILE"
         found_in_list=true
-        log "Removed $website from $list_type blocklist"
-    fi
-    
-    # Check if website is currently blocked in hosts file and remove it
-    # But only if it's not in the other blocklist type
-    local other_file="$PERMANENT_BLOCKLIST_FILE"
-    if [[ "$permanent" == "--permanent" ]]; then
-        other_file="$BLOCKLIST_FILE"
-    fi
-    
-    local should_unblock=true
-    if [[ -f "$other_file" ]] && grep -q "^$website$" "$other_file" 2>/dev/null; then
-        should_unblock=false  # Website is still in the other blocklist
+        log "Removed $website from blocklist"
     fi
     
     # Check if website is currently blocked in hosts file
     if grep -q "127\.0\.0\.1[[:space:]]*$website" "$HOSTS_FILE" 2>/dev/null; then
         was_blocked=true
-        if [[ "$should_unblock" == "true" ]]; then
+        if [[ "$force_unblock" == "true" ]]; then
             # Need root privileges to modify hosts file
             if [[ $EUID -ne 0 ]]; then
                 print_color $YELLOW "  Note: Website is still blocked in hosts file. Run with sudo to fully unblock:"
-                print_color $BLUE "  sudo weblock remove $website $([ "$permanent" == "--permanent" ] && echo "--permanent")"
+                print_color $BLUE "  sudo weblock remove -u $website"
             else
                 # Remove from hosts file
                 sed -i "/127\.0\.0\.1[[:space:]]*$website$/d" "$HOSTS_FILE"
@@ -336,16 +368,17 @@ remove_from_blocklist() {
         print_color $BOLD$GREEN "║                   WEBSITE REMOVED                         ║"
         print_color $BOLD$GREEN "╚════════════════════════════════════════════════════════════╝"
         print_color $GREEN "  Target: $website"
-        print_color $GREEN "  List: $list_type blocklist"
-        print_color $GREEN "  Status: Successfully removed from list"
+        print_color $GREEN "  List: Removed from blocklist"
         
         if [[ "$was_blocked" == "true" ]]; then
-            if [[ "$should_unblock" == "true" && $EUID -eq 0 ]]; then
+            if [[ "$force_unblock" == "true" && $EUID -eq 0 ]]; then
                 print_color $GREEN "  Blocking: Successfully unblocked"
-            elif [[ "$should_unblock" == "false" ]]; then
-                print_color $YELLOW "  Blocking: Still blocked (exists in other list)"
             else
-                print_color $YELLOW "  Blocking: Still blocked (run with sudo to unblock)"
+                if [[ "$force_unblock" == "true" ]]; then
+                    print_color $YELLOW "  Blocking: Still blocked (run with sudo to unblock)"
+                else
+                    print_color $YELLOW "  Blocking: Still blocked (use -u to unblock)"
+                fi
             fi
         else
             print_color $BLUE "  Blocking: Was not actively blocked"
@@ -357,20 +390,20 @@ remove_from_blocklist() {
         print_color $BOLD$YELLOW "║                    WEBSITE NOT FOUND                      ║"
         print_color $BOLD$YELLOW "╚════════════════════════════════════════════════════════════╝"
         print_color $YELLOW "  Target: $website"
-        print_color $YELLOW "  List: $list_type blocklist"
-        print_color $YELLOW "  Status: Not found in list"
+        print_color $YELLOW "  List: Not found in blocklist"
         
         if [[ "$was_blocked" == "true" ]]; then
-            print_color $BLUE "  Note: Website is currently blocked but not in this list"
-            print_color $BLUE "  It may be in the other blocklist or manually added"
-            if [[ $EUID -eq 0 ]]; then
-                print_color $BLUE "  Use 'weblock unlock $website' to force unblock"
+            print_color $BLUE "  Note: Website is currently blocked but not in the blocklist"
+            if [[ "$force_unblock" == "true" && $EUID -eq 0 ]]; then
+                print_color $GREEN "  Blocking: Successfully unblocked"
+            elif [[ "$force_unblock" == "true" ]]; then
+                print_color $YELLOW "  Blocking: Still blocked (run with sudo to unblock)"
             else
-                print_color $BLUE "  Use 'sudo weblock unlock $website' to force unblock"
+                print_color $BLUE "  Use 'weblock unblock $website' or 'weblock remove -u $website' to unblock"
             fi
         fi
         
-        print_color $BLUE "  Tip: Use 'weblock list' to see current blocklists"
+        print_color $BLUE "  Tip: Use 'weblock list' to see current blocklist"
         echo
     fi
 }
@@ -385,9 +418,9 @@ list_blocklist() {
     print_color $BOLD$CYAN "╚══════════════════════════════════════════════════════════════╝"
     echo
     
-    # Show temporary blocklist
+    # Show blocklist
     if [[ -f "$BLOCKLIST_FILE" ]]; then
-        print_color $BOLD$BLUE "┌─ Temporary Blocklist"
+        print_color $BOLD$BLUE "┌─ Blocklist"
         print_color $BLUE "├─────────────────────────────────────────────────────────────"
         local temp_sites=$(grep -v '^#' "$BLOCKLIST_FILE" | grep -v '^[[:space:]]*$')
         if [[ -n "$temp_sites" ]]; then
@@ -398,22 +431,6 @@ list_blocklist() {
             print_color $DIM "│  (empty)"
         fi
         print_color $BLUE "└─────────────────────────────────────────────────────────────"
-        echo
-    fi
-    
-    # Show permanent blocklist
-    if [[ -f "$PERMANENT_BLOCKLIST_FILE" ]]; then
-        print_color $BOLD$PURPLE "┌─ Permanent Blocklist"
-        print_color $PURPLE "├─────────────────────────────────────────────────────────────"
-        local perm_sites=$(grep -v '^#' "$PERMANENT_BLOCKLIST_FILE" | grep -v '^[[:space:]]*$')
-        if [[ -n "$perm_sites" ]]; then
-            echo "$perm_sites" | nl -w2 -s'. ' | sed 's/^/│  /' | while read line; do
-                print_color $WHITE "$line"
-            done
-        else
-            print_color $DIM "│  (empty)"
-        fi
-        print_color $PURPLE "└─────────────────────────────────────────────────────────────"
         echo
     fi
     
@@ -430,17 +447,9 @@ list_blocklist() {
     fi
     print_color $RED "└─────────────────────────────────────────────────────────────"
     echo
-    
-    # Timer status
-    print_color $BOLD$YELLOW "┌─ Timer Status"
-    print_color $YELLOW "├─────────────────────────────────────────────────────────────"
-    timer_status_formatted
-    print_color $YELLOW "└─────────────────────────────────────────────────────────────"
-    echo
 }
 
-# Block all websites in blocklist
-# Lock all websites in blocklist  
+# Block all websites in blocklist  
 lock_all_websites() {
     check_root
     init_files "silent"
@@ -451,7 +460,7 @@ lock_all_websites() {
     print_color $BOLD$BLUE "╚════════════════════════════════════════════════════════════╝"
     
     local locked_count=0
-    print_color $BLUE "Processing temporary blocklist..."
+    print_color $BLUE "Processing blocklist..."
     
     if [[ -f "$BLOCKLIST_FILE" ]]; then
         while IFS= read -r line; do
@@ -477,9 +486,6 @@ lock_all_websites() {
         done < "$BLOCKLIST_FILE"
     fi
     
-    # Apply permanent blocks
-    apply_permanent_blocks
-    
     echo
     if [[ $locked_count -gt 0 ]]; then
         print_color $BOLD$GREEN "╔════════════════════════════════════════════════════════════╗"
@@ -498,41 +504,6 @@ lock_all_websites() {
     flush_dns_cache
 }
 
-# Apply permanent blocks
-apply_permanent_blocks() {
-    if [[ ! -f "$PERMANENT_BLOCKLIST_FILE" ]]; then
-        return 0
-    fi
-    
-    local permanent_count=0
-    
-    while IFS= read -r line; do
-        # Skip comments and empty lines
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// }" ]] && continue
-        
-        website=$(echo "$line" | xargs)
-        website=$(clean_website "$website")
-        
-        # Skip if already blocked
-        if grep -q "127\.0\.0\.1[[:space:]]*$website" "$HOSTS_FILE" 2>/dev/null; then
-            continue
-        fi
-        
-        # Add to hosts file
-        echo "127.0.0.1    $website" >> "$HOSTS_FILE"
-        echo "127.0.0.1    www.$website" >> "$HOSTS_FILE"
-        
-        print_color $PURPLE "  PERMANENTLY LOCKED: $website"
-        ((permanent_count++))
-        
-    done < "$PERMANENT_BLOCKLIST_FILE"
-    
-    if [[ $permanent_count -gt 0 ]]; then
-        log "Applied $permanent_count permanent locks"
-    fi
-}
-
 # Unblock all websites
 unblock_all_websites() {
     check_root
@@ -547,9 +518,6 @@ unblock_all_websites() {
     
     print_color $GREEN "SUCCESS: All websites unblocked"
     log "Unblocked all websites"
-    
-    # Reapply permanent blocks
-    apply_permanent_blocks
     
     flush_dns_cache
 }
@@ -581,305 +549,43 @@ flush_dns_cache() {
     print_color $YELLOW "   • Disable DNS over HTTPS in browser settings if needed"
 }
 
-# Timer functions
-start_timer() {
-    local duration="$1"
-    local website="$2"
-    
-    if [[ -z "$duration" ]]; then
-        print_color $RED "ERROR: Please specify duration"
-        print_color $BLUE "Usage: weblock timer 30m [website]"
-        print_color $YELLOW "Formats: 30s, 15m, 2h, 1d"
-        return 1
-    fi
-    
-    # Convert duration to seconds
-    local seconds
-    if [[ "$duration" =~ ^([0-9]+)([smhd])$ ]]; then
-        local num="${BASH_REMATCH[1]}"
-        local unit="${BASH_REMATCH[2]}"
-        
-        case "$unit" in
-            s) seconds=$num ;;
-            m) seconds=$((num * 60)) ;;
-            h) seconds=$((num * 3600)) ;;
-            d) seconds=$((num * 86400)) ;;
-        esac
-    else
-        print_color $RED "ERROR: Invalid duration format"
-        print_color $YELLOW "Use: 30s, 15m, 2h, 1d"
-        return 1
-    fi
-    
-    if [[ -n "$website" ]]; then
-        # Timer for specific website
-        start_website_timer "$website" "$duration" "$seconds"
-    else
-        # Timer for all websites in blocklist
-        start_all_websites_timer "$duration" "$seconds"
-    fi
-}
-
-# Start timer for specific website
-start_website_timer() {
-    local website="$1"
-    local duration="$2"
-    local seconds="$3"
-    
-    website=$(clean_website "$website")
-    if ! validate_website "$website"; then
-        return 1
-    fi
-    
-    # Lock the specific website  
-    lock_website "$website" "" "skip_root"
-    
-    # Save timer info with website identifier
-    local end_time=$(($(date +%s) + seconds))
-    local timer_id="${website//\./_}"
-    local website_timer_file="$CONFIG_DIR/timer_${timer_id}.txt"
-    echo "$end_time|$website" > "$website_timer_file"
-    
-    print_color $BLUE "Timer started for $website for $duration ($seconds seconds)"
-    print_color $YELLOW "Website will be unblocked at: $(date -d @$end_time)"
-    log "Started timer for $website for $duration (until $(date -d @$end_time))"
-    
-    # Start background timer for specific website
-    (
-        sleep "$seconds"
-        if [[ -f "$website_timer_file" ]]; then
-            unblock_single_website "$website"
-            rm -f "$website_timer_file"
-            print_color $GREEN "Timer expired! $website has been unblocked."
-            log "Timer expired - unblocked $website automatically"
-        fi
-    ) &
-    
-    print_color $GREEN "Timer is running in background for $website"
-}
-
-# Start timer for all websites
-start_all_websites_timer() {
-    local duration="$1"
-    local seconds="$2"
-    
-    # Lock websites
-    lock_all_websites
-    
-    # Save timer info
-    local end_time=$(($(date +%s) + seconds))
-    echo "$end_time" > "$TIMER_FILE"
-    
-    print_color $BLUE "Timer started for all websites for $duration ($seconds seconds)"
-    print_color $YELLOW "Websites will be unblocked at: $(date -d @$end_time)"
-    log "Started timer for all websites for $duration (until $(date -d @$end_time))"
-    
-    # Start background timer
-    (
-        sleep "$seconds"
-        if [[ -f "$TIMER_FILE" ]]; then
-            unblock_all_websites
-            rm -f "$TIMER_FILE"
-            print_color $GREEN "Timer expired! All websites have been unblocked."
-            log "Timer expired - unblocked all websites automatically"
-        fi
-    ) &
-    
-    print_color $GREEN "Timer is running in background for all websites"
-}
-
-# Check timer status with formatting
-timer_status_formatted() {
-    local any_active=false
-    
-    # Check global timer
-    if [[ -f "$TIMER_FILE" ]]; then
-        local end_time=$(cat "$TIMER_FILE")
-        local current_time=$(date +%s)
-        
-        if [[ $current_time -lt $end_time ]]; then
-            local remaining=$((end_time - current_time))
-            local hours=$((remaining / 3600))
-            local minutes=$(((remaining % 3600) / 60))
-            local seconds=$((remaining % 60))
-            
-            print_color $GREEN "│  Global Timer: ACTIVE"
-            print_color $WHITE "│  Time remaining: ${hours}h ${minutes}m ${seconds}s"
-            print_color $WHITE "│  Will unblock at: $(date -d @$end_time)"
-            any_active=true
-        else
-            print_color $RED "│  Global timer has expired but cleanup may not have completed"
-            rm -f "$TIMER_FILE"
-        fi
-    fi
-    
-    # Check individual website timers
-    local website_timers=("$CONFIG_DIR"/timer_*.txt)
-    if [[ -e "${website_timers[0]}" ]]; then
-        for timer_file in "${website_timers[@]}"; do
-            if [[ -f "$timer_file" ]]; then
-                local timer_data=$(cat "$timer_file")
-                local end_time="${timer_data%|*}"
-                local website="${timer_data#*|}"
-                local current_time=$(date +%s)
-                
-                if [[ $current_time -lt $end_time ]]; then
-                    local remaining=$((end_time - current_time))
-                    local hours=$((remaining / 3600))
-                    local minutes=$(((remaining % 3600) / 60))
-                    local seconds=$((remaining % 60))
-                    
-                    print_color $GREEN "│  Website Timer: $website - ACTIVE"
-                    print_color $WHITE "│  Time remaining: ${hours}h ${minutes}m ${seconds}s"
-                    print_color $WHITE "│  Will unblock at: $(date -d @$end_time)"
-                    any_active=true
-                else
-                    print_color $RED "│  Timer for $website has expired but cleanup may not have completed"
-                    rm -f "$timer_file"
-                fi
-            fi
-        done
-    fi
-    
-    if [[ "$any_active" == false ]]; then
-        print_color $DIM "│  No active timers"
-    fi
-}
-
-# Check timer status
-timer_status() {
-    echo
-    print_color $BOLD$YELLOW "╔════════════════════════════════════════════════════════════╗"
-    print_color $BOLD$YELLOW "║                      TIMER STATUS                         ║"
-    print_color $BOLD$YELLOW "╚════════════════════════════════════════════════════════════╝"
-    
-    local any_active=false
-    
-    # Check global timer
-    if [[ -f "$TIMER_FILE" ]]; then
-        local end_time=$(cat "$TIMER_FILE")
-        local current_time=$(date +%s)
-        
-        if [[ $current_time -lt $end_time ]]; then
-            local remaining=$((end_time - current_time))
-            local hours=$((remaining / 3600))
-            local minutes=$(((remaining % 3600) / 60))
-            local seconds=$((remaining % 60))
-            
-            print_color $GREEN "  Global Timer: ACTIVE"
-            print_color $WHITE "  Time remaining: ${hours}h ${minutes}m ${seconds}s"
-            print_color $WHITE "  Will unblock at: $(date -d @$end_time)"
-            any_active=true
-        else
-            print_color $RED "  Global timer has expired but cleanup may not have completed"
-            rm -f "$TIMER_FILE"
-        fi
-    fi
-    
-    # Check individual website timers
-    local website_timers=("$CONFIG_DIR"/timer_*.txt)
-    if [[ -e "${website_timers[0]}" ]]; then
-        for timer_file in "${website_timers[@]}"; do
-            if [[ -f "$timer_file" ]]; then
-                local timer_data=$(cat "$timer_file")
-                local end_time="${timer_data%|*}"
-                local website="${timer_data#*|}"
-                local current_time=$(date +%s)
-                
-                if [[ $current_time -lt $end_time ]]; then
-                    local remaining=$((end_time - current_time))
-                    local hours=$((remaining / 3600))
-                    local minutes=$(((remaining % 3600) / 60))
-                    local seconds=$((remaining % 60))
-                    
-                    print_color $GREEN "  Website Timer: $website - ACTIVE"
-                    print_color $WHITE "  Time remaining: ${hours}h ${minutes}m ${seconds}s"
-                    print_color $WHITE "  Will unblock at: $(date -d @$end_time)"
-                    any_active=true
-                else
-                    print_color $RED "  Timer for $website has expired but cleanup may not have completed"
-                    rm -f "$timer_file"
-                fi
-            fi
-        done
-    fi
-    
-    if [[ "$any_active" == false ]]; then
-        print_color $GREEN "  Status: No active timers"
-    fi
-    echo
-}
-
-# Stop timer
-stop_timer() {
-    local website="$1"
-    local stopped_any=false
-    
-    if [[ -n "$website" ]]; then
-        # Stop specific website timer
-        website=$(clean_website "$website")
-        local timer_id="${website//\./_}"
-        local website_timer_file="$CONFIG_DIR/timer_${timer_id}.txt"
-        
-        if [[ -f "$website_timer_file" ]]; then
-            rm -f "$website_timer_file"
-            unblock_single_website "$website"
-            print_color $GREEN "Timer stopped and $website unblocked"
-            log "Timer manually stopped for $website"
-            stopped_any=true
-        else
-            print_color $YELLOW "WARNING: No active timer found for $website"
-        fi
-    else
-        # Stop all timers
-        if [[ -f "$TIMER_FILE" ]]; then
-            rm -f "$TIMER_FILE"
-            unblock_all_websites
-            print_color $GREEN "Global timer stopped and all websites unblocked"
-            log "Global timer manually stopped"
-            stopped_any=true
-        fi
-        
-        # Stop individual website timers
-        local website_timers=("$CONFIG_DIR"/timer_*.txt)
-        if [[ -e "${website_timers[0]}" ]]; then
-            for timer_file in "${website_timers[@]}"; do
-                if [[ -f "$timer_file" ]]; then
-                    local timer_data=$(cat "$timer_file")
-                    local website="${timer_data#*|}"
-                    rm -f "$timer_file"
-                    unblock_single_website "$website"
-                    print_color $GREEN "Timer stopped for $website"
-                    log "Timer manually stopped for $website"
-                    stopped_any=true
-                fi
-            done
-        fi
-    fi
-    
-    if [[ "$stopped_any" == false ]]; then
-        print_color $YELLOW "WARNING: No active timers to stop"
-    fi
-}
-
 # Reset WeBlock configuration
 reset_weblock() {
-    local force="$1"
+    local force=false
     
-    if [[ "$force" != "--force" ]]; then
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--force)
+                force=true
+                shift
+                ;;
+            -*)
+                print_color $RED "ERROR: Unknown option: $1"
+                print_color $BLUE "Usage: weblock reset [-f|--force]"
+                return 1
+                ;;
+            *)
+                print_color $RED "ERROR: Unknown argument: $1"
+                print_color $BLUE "Usage: weblock reset [-f|--force]"
+                return 1
+                ;;
+        esac
+    done
+    
+    if [[ "$force" != "true" ]]; then
         echo
         print_color $BOLD$YELLOW "╔════════════════════════════════════════════════════════════╗"
         print_color $BOLD$YELLOW "║                    RESET CONFIRMATION                     ║"
         print_color $BOLD$YELLOW "╚════════════════════════════════════════════════════════════╝"
         print_color $YELLOW "  This will:"
-        print_color $RED "    • Remove all websites from blocklists"
+        print_color $RED "    • Remove all websites from blocklist"
         print_color $RED "    • Restore original hosts file (unblock all)"
-        print_color $RED "    • Stop all active timers"
         print_color $RED "    • Clear all WeBlock configuration"
         echo
         print_color $BOLD$RED "  This action cannot be undone!"
         echo
-        print_color $BLUE "  To confirm, run: weblock reset --force"
+        print_color $BLUE "  To confirm, run: weblock reset -f"
         echo
         return 0
     fi
@@ -891,25 +597,8 @@ reset_weblock() {
     print_color $BOLD$BLUE "║                   RESETTING WEBLOCK                       ║"
     print_color $BOLD$BLUE "╚════════════════════════════════════════════════════════════╝"
     
-    # Stop all timers
-    print_color $BLUE "  [1/5] Stopping all timers..."
-    if [[ -f "$TIMER_FILE" ]]; then
-        rm -f "$TIMER_FILE"
-        print_color $GREEN "        Global timer stopped"
-    fi
-    
-    local website_timers=("$CONFIG_DIR"/timer_*.txt)
-    if [[ -e "${website_timers[0]}" ]]; then
-        for timer_file in "${website_timers[@]}"; do
-            if [[ -f "$timer_file" ]]; then
-                rm -f "$timer_file"
-                print_color $GREEN "        Website timer stopped"
-            fi
-        done
-    fi
-    
     # Restore original hosts file
-    print_color $BLUE "  [2/5] Restoring original hosts file..."
+    print_color $BLUE "  [1/4] Restoring original hosts file..."
     if [[ -f "$BACKUP_FILE" ]]; then
         cp "$BACKUP_FILE" "$HOSTS_FILE"
         print_color $GREEN "        Hosts file restored"
@@ -924,23 +613,19 @@ reset_weblock() {
     fi
     
     # Clear blocklists
-    print_color $BLUE "  [3/5] Clearing blocklists..."
+    print_color $BLUE "  [2/4] Clearing blocklist..."
     if [[ -f "$BLOCKLIST_FILE" ]]; then
         > "$BLOCKLIST_FILE"
-        print_color $GREEN "        Temporary blocklist cleared"
-    fi
-    if [[ -f "$PERMANENT_BLOCKLIST_FILE" ]]; then
-        > "$PERMANENT_BLOCKLIST_FILE"
-        print_color $GREEN "        Permanent blocklist cleared"
+        print_color $GREEN "        Blocklist cleared"
     fi
     
     # Clear DNS cache
-    print_color $BLUE "  [4/5] Clearing DNS cache..."
+    print_color $BLUE "  [3/4] Clearing DNS cache..."
     flush_dns_cache > /dev/null 2>&1
     print_color $GREEN "        DNS cache cleared"
     
     # Reinitialize clean configuration
-    print_color $BLUE "  [5/5] Reinitializing configuration..."
+    print_color $BLUE "  [4/4] Reinitializing configuration..."
     init_files "silent"
     print_color $GREEN "        Configuration reinitialized"
     
@@ -949,8 +634,7 @@ reset_weblock() {
     print_color $BOLD$GREEN "║                    RESET COMPLETE                         ║"
     print_color $BOLD$GREEN "╚════════════════════════════════════════════════════════════╝"
     print_color $GREEN "  All websites have been unblocked"
-    print_color $GREEN "  All blocklists have been cleared"
-    print_color $GREEN "  All timers have been stopped"
+    print_color $GREEN "  Blocklist has been cleared"
     print_color $GREEN "  WeBlock is ready for fresh configuration"
     echo
     
@@ -980,37 +664,33 @@ $(print_color $RED "└───────────────────
 
 $(print_color $BOLD$GREEN "┌─ MAIN COMMANDS")
 $(print_color $GREEN "├──────────────────────────────────────────────────────────────────────────────")
-$(print_color $WHITE "│  $(print_color $CYAN "weblock lock")      <website>         Lock (block) specific website")
+$(print_color $WHITE "│  $(print_color $CYAN "weblock lock")      <website> [-n]    Lock (block) specific website")
+$(print_color $WHITE "│  $(print_color $CYAN "weblock block")     <website>         Block website without adding to list")
 $(print_color $WHITE "│  $(print_color $CYAN "weblock lock-all")                    Lock all websites from blocklist")
 $(print_color $WHITE "│  $(print_color $CYAN "weblock unlock")    [website]         Unlock specific website or all")
-$(print_color $WHITE "│  $(print_color $CYAN "weblock list")                        Show status and blocklists")
-$(print_color $WHITE "│  $(print_color $CYAN "weblock remove")    <website>         Remove website from blocklist")
-$(print_color $WHITE "│  $(print_color $CYAN "weblock reset")     [--force]         Reset all configuration")
+$(print_color $WHITE "│  $(print_color $CYAN "weblock list")                        Show status and blocklist")
+$(print_color $WHITE "│  $(print_color $CYAN "weblock remove")    <website> [-u]    Remove website from blocklist")
+$(print_color $WHITE "│  $(print_color $CYAN "weblock reset")     [-f|--force]      Reset all configuration")
 $(print_color $GREEN "└──────────────────────────────────────────────────────────────────────────────")
 
-$(print_color $BOLD$YELLOW "┌─ TIMER COMMANDS")
-$(print_color $YELLOW "├──────────────────────────────────────────────────────────────────────────────")
-$(print_color $WHITE "│  $(print_color $CYAN "weblock timer")     <duration> [site] Lock websites for specified time")
-$(print_color $WHITE "│  $(print_color $CYAN "weblock status")                      Check active timer status")
-$(print_color $WHITE "│  $(print_color $CYAN "weblock stop")      [website]         Stop active timers")
-$(print_color $YELLOW "├──────────────────────────────────────────────────────────────────────────────")
-$(print_color $WHITE "│  Duration formats: 30s, 15m, 2h, 1d")
-$(print_color $YELLOW "└──────────────────────────────────────────────────────────────────────────────")
+$(print_color $BOLD$PURPLE "┌─ FLAGS & OPTIONS")
+$(print_color $PURPLE "├──────────────────────────────────────────────────────────────────────────────")
+$(print_color $WHITE "│  $(print_color $GREEN "-n, --no-list")   Don't add website to blocklist when locking")
+$(print_color $WHITE "│  $(print_color $GREEN "-u, --unblock")   Also unblock website when removing from list")
+$(print_color $WHITE "│  $(print_color $GREEN "-f, --force")     Force reset without confirmation")
+$(print_color $PURPLE "└──────────────────────────────────────────────────────────────────────────────")
 
 $(print_color $BOLD$PURPLE "┌─ EXAMPLES")
 $(print_color $PURPLE "├──────────────────────────────────────────────────────────────────────────────")
 $(print_color $WHITE "│  $(print_color $GREEN "Basic:")         weblock init                    # Initialize WeBlock")
 $(print_color $WHITE "│                 weblock lock facebook.com          # Lock Facebook")
 $(print_color $WHITE "│                 weblock list                       # Show status")
-$(print_color $WHITE "│                 weblock remove facebook.com        # Remove from list")
+$(print_color $WHITE "│                 weblock remove -u facebook.com     # Remove & unblock")
 $(print_color $WHITE "│")
-$(print_color $WHITE "│  $(print_color $GREEN "Timers:")        sudo weblock timer 2h             # Lock all for 2 hours")
-$(print_color $WHITE "│                 sudo weblock timer 30m facebook.com # Lock Facebook 30min")
-$(print_color $WHITE "│                 weblock status                     # Check timers")
-$(print_color $WHITE "│")
-$(print_color $WHITE "│  $(print_color $GREEN "Permanent:")     weblock lock malware-site.com --permanent")
-$(print_color $WHITE "│")
-$(print_color $WHITE "│  $(print_color $GREEN "Reset:")         sudo weblock reset --force        # Complete reset")
+$(print_color $WHITE "│  $(print_color $GREEN "Advanced:")      weblock lock -n facebook.com      # Block without adding to list")
+$(print_color $WHITE "│                 weblock lock-all                   # Block all sites in list")
+$(print_color $WHITE "│                 weblock unlock                     # Unblock all websites")
+$(print_color $WHITE "│                 sudo weblock reset -f              # Complete reset")
 $(print_color $PURPLE "└──────────────────────────────────────────────────────────────────────────────")
 
 $(print_color $DIM "Configuration: ~/.config/weblock/")
@@ -1021,46 +701,43 @@ EOF
 
 # Main script logic
 main() {
-    case "${1:-help}" in
+    local command="${1:-help}"
+    shift 2>/dev/null
+
+    case "$command" in
         init)
             init_files "show_banner"
             ;;
         lock)
-            lock_website "$2" "$3"
+            lock_website "$@"
+            ;;
+        block)
+            block_single_website "$@"
             ;;
         lock-all)
             lock_all_websites
             ;;
         remove)
-            remove_from_blocklist "$2" "$3"
+            remove_from_blocklist "$@"
             ;;
         list|ls)
             list_blocklist
             ;;
         unlock)
-            if [[ -n "$2" ]]; then
-                unblock_single_website "$2"
+            if [[ -n "$1" ]]; then
+                unblock_single_website "$1"
             else
                 unblock_all_websites
             fi
             ;;
-        timer)
-            start_timer "$2" "$3"
-            ;;
-        status)
-            timer_status
-            ;;
-        stop)
-            stop_timer "$2"
-            ;;
         reset)
-            reset_weblock "$2"
+            reset_weblock "$@"
             ;;
         help|--help|-h)
             show_help
             ;;
         *)
-            print_color $RED "ERROR: Unknown command: $1"
+            print_color $RED "ERROR: Unknown command: $command"
             print_color $BLUE "Run 'weblock help' for usage information"
             exit 1
             ;;
